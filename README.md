@@ -21,9 +21,18 @@ func TestSum(t *testing.T) {
 	assert.Eq(t, got, 3)
 	assert.Val(t, got).NotZero().Eq(3)
 }
+
+func TestOpen(t *testing.T) {
+	_, err := Open("missing.txt")
+
+	var pe *fs.PathError
+	assert.ErrVal(t, err).Is(fs.ErrNotExist).As(&pe).Fatal()
+	assert.Eq(t, pe.Path, "missing.txt")
+}
 ```
 
 Every assertion reports through `t.Errorf`, so the test continues after a failure.
+In an `ErrVal` chain, `Fatal()` stops the test if any earlier check in the chain failed.
 
 ## cmd
 

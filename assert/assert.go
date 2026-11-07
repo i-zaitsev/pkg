@@ -7,6 +7,8 @@
 // Every assertion reports through t.Errorf, so a failing check marks the test as
 // failed but lets it continue. Values can be checked with plain functions,
 // assert.Eq(t, got, want), or fluently, assert.Val(t, got).NotZero().Eq(want).
+// Errors have their own chain, assert.ErrVal(t, err).Is(target).Fatal(), where
+// Fatal stops the test if any earlier check in the chain failed.
 //
 // The assertion logic lives in check, a pure backend that records failure
 // messages without touching testing. The exported functions run a check and
@@ -70,6 +72,12 @@ func (c *check) errContains(err error, substr string) {
 	}
 	if !strings.Contains(err.Error(), substr) {
 		c.fail("expected error containing %q, got: %q", substr, err.Error())
+	}
+}
+
+func (c *check) errAs(err error, target any) {
+	if !errors.As(err, target) {
+		c.fail("expected error of type %v, got: %v", reflect.TypeOf(target).Elem(), err)
 	}
 }
 
@@ -447,5 +455,69 @@ func (v *Value[T]) Zero() *Value[T] {
 func (v *Value[T]) NotZero() *Value[T] {
 	v.t.Helper()
 	NotZero(v.t, v.val)
+	return v
+}
+
+// ErrValue wraps an error under test for fluent, chainable assertions.
+type ErrValue struct {
+	t      testing.TB
+	err    error
+	failed bool
+}
+
+// ErrVal starts a fluent assertion on err.
+func ErrVal(t testing.TB, err error) *ErrValue {
+	return &ErrValue{t: t, err: err}
+}
+
+// Nil checks that the error is nil.
+func (v *ErrValue) Nil() *ErrValue {
+	v.t.Helper()
+	return v.run(func(c *check) { c.notErr(v.err) })
+}
+
+// NotNil checks that the error is not nil.
+func (v *ErrValue) NotNil() *ErrValue {
+	v.t.Helper()
+	return v.run(func(c *check) { c.err(v.err) })
+}
+
+// Is checks that the error matches target, according to errors.Is.
+func (v *ErrValue) Is(target error) *ErrValue {
+	v.t.Helper()
+	return v.run(func(c *check) { c.errIs(v.err, target) })
+}
+
+// Contains checks that the error is not nil and its message contains substr.
+func (v *ErrValue) Contains(substr string) *ErrValue {
+	v.t.Helper()
+	return v.run(func(c *check) { c.errContains(v.err, substr) })
+}
+
+// As checks that the error matches target according to errors.As and sets
+// target to the matching error. As with errors.As, target must be a non-nil pointer.
+func (v *ErrValue) As(target any) *ErrValue {
+	v.t.Helper()
+	return v.run(func(c *check) { c.errAs(v.err, target) })
+}
+
+// Fatal stops the test with t.FailNow if any earlier check in the chain failed.
+// Checks after Fatal are not affected.
+func (v *ErrValue) Fatal() *ErrValue {
+	v.t.Helper()
+	if v.failed {
+		v.t.FailNow()
+	}
+	return v
+}
+
+func (v *ErrValue) run(fn func(c *check)) *ErrValue {
+	v.t.Helper()
+	c := createCheck()
+	fn(c)
+	if len(c.fails) > 0 {
+		v.failed = true
+	}
+	c.report(v.t)
 	return v
 }

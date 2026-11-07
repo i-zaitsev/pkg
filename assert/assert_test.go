@@ -45,7 +45,8 @@ func TestMain(m *testing.M) {
 
 type recorder struct {
 	testing.TB
-	msgs []string
+	msgs    []string
+	stopped bool
 }
 
 func (r *recorder) Helper() {}
@@ -53,6 +54,8 @@ func (r *recorder) Helper() {}
 func (r *recorder) Errorf(format string, args ...any) {
 	r.msgs = append(r.msgs, fmt.Sprintf(format, args...))
 }
+
+func (r *recorder) FailNow() { r.stopped = true }
 
 func TestReport_realCheck_forwardsFailures(t *testing.T) {
 	rec := &recorder{TB: t}
@@ -384,6 +387,75 @@ func TestValue(t *testing.T) {
 				backend.hasFails(t, "chain should fail but succeeded")
 			} else {
 				backend.noFails(t, "chain should succeed but failed")
+			}
+		})
+	}
+}
+
+func TestErrVal(t *testing.T) {
+	errX := errors.New("x")
+	wrapped := fmt.Errorf("wrap: %w", errX)
+	tests := []struct {
+		name  string
+		chain func(t testing.TB)
+		fails bool
+	}{
+		{"nil", func(t testing.TB) { ErrVal(t, nil).Nil() }, false},
+		{"nil_fails", func(t testing.TB) { ErrVal(t, errX).Nil() }, true},
+		{"not_nil", func(t testing.TB) { ErrVal(t, errX).NotNil() }, false},
+		{"not_nil_fails", func(t testing.TB) { ErrVal(t, nil).NotNil() }, true},
+		{"is", func(t testing.TB) { ErrVal(t, wrapped).NotNil().Is(errX) }, false},
+		{"is_fails", func(t testing.TB) { ErrVal(t, errors.New("y")).Is(errX) }, true},
+		{"contains", func(t testing.TB) { ErrVal(t, wrapped).Contains("wrap") }, false},
+		{"contains_fails", func(t testing.TB) { ErrVal(t, errX).Contains("y") }, true},
+		{"contains_nil_fails", func(t testing.TB) { ErrVal(t, nil).Contains("x") }, true},
+		{"as", func(t testing.TB) { var e *errA; ErrVal(t, fmt.Errorf("w: %w", &errA{})).As(&e) }, false},
+		{"as_fails", func(t testing.TB) { var e *errB; ErrVal(t, &errA{}).As(&e) }, true},
+		{"mid_chain_fails", func(t testing.TB) { ErrVal(t, nil).NotNil().Nil() }, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.chain(t)
+			if tt.fails {
+				backend.hasFails(t, "chain should fail but succeeded")
+			} else {
+				backend.noFails(t, "chain should succeed but failed")
+			}
+		})
+	}
+}
+
+func TestErrVal_As_setsTarget(t *testing.T) {
+	want := &errA{}
+	var got *errA
+
+	ErrVal(t, fmt.Errorf("w: %w", want)).As(&got)
+	backend.noFails(t, "As expected to succeed but failed")
+	if got != want {
+		t.Errorf("As set target to %v, want %v", got, want)
+	}
+}
+
+func TestErrVal_Fatal(t *testing.T) {
+	errX := errors.New("x")
+	tests := []struct {
+		name  string
+		chain func(t testing.TB)
+		stops bool
+	}{
+		{"passed_chain_continues", func(t testing.TB) { ErrVal(t, nil).Nil().Fatal() }, false},
+		{"failed_chain_stops", func(t testing.TB) { ErrVal(t, nil).NotNil().Fatal() }, true},
+		{"early_failure_stops", func(t testing.TB) { ErrVal(t, nil).NotNil().Nil().Fatal() }, true},
+		{"failure_after_fatal_continues", func(t testing.TB) { ErrVal(t, nil).Nil().Fatal().NotNil() }, false},
+		{"empty_chain_continues", func(t testing.TB) { ErrVal(t, errX).Fatal() }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend.fails = nil
+			rec := &recorder{TB: t}
+			tt.chain(rec)
+			if rec.stopped != tt.stops {
+				t.Errorf("stopped = %v, want %v", rec.stopped, tt.stops)
 			}
 		})
 	}
